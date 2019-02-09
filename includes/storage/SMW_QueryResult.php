@@ -4,6 +4,8 @@ use SMW\Query\Excerpts;
 use SMW\Query\PrintRequest;
 use SMW\Query\QueryLinker;
 use SMW\Query\Result\ResolverJournal;
+use SMW\Query\Result\ResultFieldMatchFinder;
+use SMW\Query\Result\ItemFetcher;
 use SMW\Query\ScoreSet;
 use SMW\SerializerFactory;
 
@@ -78,6 +80,11 @@ class SMWQueryResult {
 	private $resolverJournal;
 
 	/**
+	 * @var ResultFieldMatchFinder
+	 */
+	private $resultFieldMatchFinder;
+
+	/**
 	 * @var integer
 	 */
 	private $serializer_version = 2;
@@ -112,6 +119,27 @@ class SMWQueryResult {
 		$this->mQuery = $query;
 		$this->mStore = $store;
 		$this->resolverJournal = new ResolverJournal();
+
+		$itemFetcher = new ItemFetcher( $store, $this->mResults );
+
+		// Used temporarily to allow switching back while testing
+		$itemFetcher->setPrefetchFlag( $GLOBALS['smwgExperimentalFeatures'] );
+
+		// Init the instance here so the value cache is shared and hereby avoids
+		// a static declaration
+		$this->resultFieldMatchFinder = new ResultFieldMatchFinder(
+			$store,
+			$itemFetcher
+		);
+	}
+
+	/**
+	 * @since 3.1
+	 *
+	 * @return ResultFieldMatchFinder
+	 */
+	public function getResultFieldMatchFinder() {
+		return $this->resultFieldMatchFinder;
 	}
 
 	/**
