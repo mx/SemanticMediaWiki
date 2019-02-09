@@ -42,6 +42,11 @@ class PropertySubjectsLookup {
 	private $dataItemHandler;
 
 	/**
+	 * @var array
+	 */
+	private $prefetch = [];
+
+	/**
 	 * @since 3.0
 	 *
 	 * @param SQLStore $store
@@ -59,6 +64,78 @@ class PropertySubjectsLookup {
 	 * {@inheritDoc}
 	 */
 	public function fetchFromTable( $pid, TableDefinition $proptable, DataItem $dataItem = null, RequestOptions $requestOptions = null ) {
+
+		$res = $this->doFetch( $pid, $proptable, $dataItem, $requestOptions, __METHOD__ );
+
+		// Return an iterator and avoid resolving the resources directly as it
+		// may contain a large list of possible matches
+		$res = $this->iteratorFactory->newMappingIterator(
+			$this->iteratorFactory->newResultIterator( $res ),
+			[ $this, 'newFromRow' ]
+		);
+
+		return $res;
+	}
+
+	/**
+	 * @since 3.1
+	 *
+	 * @param array $ids
+	 * @param DataItem $property
+	 * @param TableDefinition $proptable
+	 * @param RequestOptions $requestOptions
+	 */
+	public function prefetchFromTable( array $ids, DataItem $property, TableDefinition $proptable, RequestOptions $requestOptions ) {
+
+		if ( $ids === [] ) {
+			return [];
+		}
+
+		$hash = $property->getSerialization();
+
+		if ( $requestOptions->getOption( RequestOptions::PREFETCH_FINGERPRINT ) === null ) {
+			$hash .= implode( '|', $ids );
+		}
+
+		$hash = md5( $hash . $requestOptions->getHash() );
+
+		if ( isset( $this->prefetch[$hash] ) ) {
+			return $this->prefetch[$hash];
+		}
+
+		$pid = $this->store->getObjectIds()->getSMWPropertyID(
+			$property
+		);
+
+		$res = $this->doFetch( $pid, $proptable, $ids, $requestOptions, __METHOD__ );
+		$result = [];
+
+		// Reassign per ID
+		foreach ( $res as $row ) {
+
+			if ( !isset( $result[$row->id] ) ) {
+				$result[$row->id] = [];
+			}
+
+			$keys = [
+				$row->smw_title,
+				$row->smw_namespace,
+				$row->smw_iw,
+				$row->smw_sort,
+				$row->smw_subobject
+
+			];
+
+			$dataItem = $this->dataItemHandler->dataItemFromDBKeys( $keys );
+			$dataItem->setId( $row->smw_id );
+
+			$result[$row->id][] = $dataItem;
+		}
+
+		return $this->prefetch[$hash] = $result;
+	}
+
+	private function doFetch( $pid, TableDefinition $proptable, $dataItem = null, RequestOptions $requestOptions = null, $fname ) {
 
 		$connection = $this->store->getConnection( 'mw.db' );
 		$group = false;
@@ -134,7 +211,20 @@ class PropertySubjectsLookup {
 			$query->condition( $query->eq( "t1.p_id", $pid ) );
 		}
 
-		$this->getWhereConds( $query, $dataItem );
+		// Specified by the prefetch
+		if ( is_array( $dataItem ) ) {
+
+			$fieldname = 's_id';
+
+			if ( $proptable->getDiType() === DataItem::TYPE_WIKIPAGE ) {
+				$fieldname = 'o_id';
+			}
+
+			$query->condition( $query->in( "t1.$fieldname", $dataItem ) );
+			$query->field( "t1.$fieldname AS id" );
+		} else {
+			$this->getWhereConds( $query, $dataItem );
+		}
 
 		if ( $requestOptions !== null ) {
 			foreach ( $requestOptions->getExtraConditions() as $extraCondition ) {
@@ -193,18 +283,11 @@ class PropertySubjectsLookup {
 
 		$res = $connection->query(
 			$query,
-			__METHOD__
+			$fname
 		);
 
 		$this->dataItemHandler = $this->store->getDataItemHandlerForDIType(
 			DataItem::TYPE_WIKIPAGE
-		);
-
-		// Return an iterator and avoid resolving the resources directly as it
-		// may contain a large list of possible matches
-		$res = $this->iteratorFactory->newMappingIterator(
-			$this->iteratorFactory->newResultIterator( $res ),
-			[ $this, 'newFromRow' ]
 		);
 
 		return $res;
